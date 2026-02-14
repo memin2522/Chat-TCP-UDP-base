@@ -1,65 +1,88 @@
 using System; 
 using System.Net;
-using System.Net.Sockets; 
+using System.Net.Sockets;
+using System.Text;
+using System.Threading.Tasks;
 using UnityEngine;
 
-public class TCPServer : MonoBehaviour
+public class TCPServer : MonoBehaviour, IServer
 {
     private TcpListener tcpListener; // TCP server declaration
     private TcpClient connectedClient; // Connected client declaration
     private NetworkStream networkStream; // Network data stream
-    private byte[] receiveBuffer; // Buffer to store received data
 
-    public bool isServerRunning;
+    public bool isServerRunning { get; private set; }
 
-    public void StartServer(int port)
+    public event Action<string> OnMessageReceived;
+    public event Action OnConnected;
+    public event Action OnDisconnected;
+
+    public async Task StartServer(int port)
     {
         tcpListener = new TcpListener(IPAddress.Any, port); // Configures the TCP server to listen on any IP and the specified port
         tcpListener.Start(); // Starts the TCP server
-        Debug.Log("Server started, waiting for connections..."); // Displays a message in the Unity console indicating that the server has started
-        tcpListener.BeginAcceptTcpClient(HandleIncomingConnection, null); // Begins asynchronously accepting clients
+
+        Debug.Log("[Server] Server started, waiting for connections..."); // Displays a message in the Unity console indicating that the server has started
         isServerRunning = true;
+
+        connectedClient = await tcpListener.AcceptTcpClientAsync(); //The server start listens for incoming client connections asynchronously
+        Debug.Log("[Server] Client connected: " + connectedClient.Client.RemoteEndPoint);
+        OnConnected?.Invoke(); // Invokes the OnConnected event, notifying any subscribed listeners that a client has connected
+
+        networkStream = connectedClient.GetStream();
+        _ = ReceiveLoop();
     }
 
-    private void HandleIncomingConnection(IAsyncResult result)
+    private async Task ReceiveLoop()
     {
-        connectedClient = tcpListener.EndAcceptTcpClient(result); // Completes client acceptance and establishes the connection
-        networkStream = connectedClient.GetStream(); // Retrieves the network data stream from the connected client
-        Debug.Log("Client connected: " + connectedClient.Client.RemoteEndPoint); // Displays a message in the console indicating that a client has connected
-        receiveBuffer = new byte[connectedClient.ReceiveBufferSize]; // Initializes the reception buffer with the client's buffer size
-        networkStream.BeginRead(receiveBuffer, 0, receiveBuffer.Length, ReceiveData, null); // Begins asynchronously reading data from the network stream
-        tcpListener.BeginAcceptTcpClient(HandleIncomingConnection, null); // Continues waiting for new client connections asynchronously
-    }
-
-    private void ReceiveData(IAsyncResult result)
-    {
-        int bytesRead = networkStream.EndRead(result); // Completes reading data from the network stream and gets the number of bytes read
-        
-        if (bytesRead <= 0) // If no bytes are read, the client has disconnected
+        byte[] buffer = new byte[1024];// Buffer to store incoming data from the client 1024 bytes = 1 KB
+        try
         {
-            Debug.Log("Client disconnected: " + connectedClient.Client.RemoteEndPoint); // Displays a message in the console indicating that the client has disconnected
-            connectedClient.Close(); // Closes the connection with the client
+            while (connectedClient != null && connectedClient.Connected)// Continuously checks if the client is still connected
+            {
+                int bytesRead = await networkStream.ReadAsync(buffer, 0, buffer.Length);// Reads data from the network stream asynchronously and stores it in the buffer, returning the number of bytes read
+
+                if (bytesRead == 0)//If the client is disconnected ReadAsync returns 0 bytes read
+                {
+                    Debug.Log("[Server] Client disconnected");
+                    break;
+                }
+
+                string message = Encoding.UTF8.GetString(buffer, 0, bytesRead);// Converts the received bytes into a string message using UTF-8 encoding
+                Debug.Log("[Server] Received: " + message);
+                OnMessageReceived?.Invoke(message);// Invokes the OnMessageReceived event, passing the received message to any subscribed listeners
+            }
+        }
+        finally
+        {
+            Disconnect();// Ensures that the connection is closed when the loop ends, whether due to disconnection or an error
+        }
+    }
+
+    public async Task SendMessageAsync(string message)
+    {
+        if (networkStream == null || !connectedClient.Connected)// Checks if there is an active connection to a client before attempting to send a message
+        {
+            Debug.Log("[Server] No client connected");
             return;
         }
-        byte[] receivedBytes = new byte[bytesRead]; // Copies the received data into a new byte array
-        Array.Copy(receiveBuffer, receivedBytes, bytesRead);
-        string receivedMessage = System.Text.Encoding.UTF8.GetString(receivedBytes); // Converts the received bytes into a text message
-        Debug.Log("Received from client: " + receivedMessage); // Displays the received message in the console
-        networkStream.BeginRead(receiveBuffer, 0, receiveBuffer.Length, ReceiveData, null); // Continues reading data from the network stream asynchronously
+
+        byte[] data = Encoding.UTF8.GetBytes(message);// Converts the message string into a byte array using UTF-8 encoding
+        await networkStream.WriteAsync(data, 0, data.Length);// Writes the byte array to the network stream asynchronously, sending it to the connected client
+
+        Debug.Log("[Server] Sent: " + message);
     }
 
-    public void SendData(string message)
+    public void Disconnect() // Closes the connection to the client and cleans up resources
     {
-        try{
-            byte[] sendBytes = System.Text.Encoding.UTF8.GetBytes(message); // Converts the message into a byte array
-            networkStream.Write(sendBytes, 0, sendBytes.Length); // Writes the bytes to the network stream to send them to the client
-            networkStream.Flush(); // Clears the data stream to ensure data is sent
-            Debug.Log("Sent to client: " + message); // Displays a message in the console indicating that the message has been sent
-        }
-        catch{
-            Debug.Log("There is no client to send the message: " + message);
-        }
-        
+        networkStream?.Close();
+        connectedClient?.Close();
+
+        networkStream = null;
+        connectedClient = null;
+
+        Debug.Log("[Server] Disconnected");
+        OnDisconnected?.Invoke(); // Invokes the OnDisconnected event, notifying any subscribed listeners that the client has disconnected
     }
 
 }
