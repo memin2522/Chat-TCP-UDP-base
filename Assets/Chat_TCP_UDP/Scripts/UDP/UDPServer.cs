@@ -1,44 +1,96 @@
 using System;
 using System.Net;
 using System.Net.Sockets;
-using TMPro;
-using Unity.VisualScripting;
+using System.Text;
+using System.Threading.Tasks;
 using UnityEngine;
-using UnityEngine.UI;
-using static System.Net.Mime.MediaTypeNames;
 
-public class UDPServer : MonoBehaviour
+public class UDPServer : MonoBehaviour, IServer
 {
     private UdpClient udpServer; // UDP client to handle network communication
     private IPEndPoint remoteEndPoint; // Endpoint to identify the remote client
 
-    Texture2D receivedTexture = new Texture2D(480, 270, TextureFormat.RGB24, false);
+    public event Action<string> OnMessageReceived;
+    public event Action OnConnected;
+    public event Action OnDisconnected;
 
-    public bool isServerRunning = false; // Flag to check if the server is running
+    public bool isServerRunning { get; private set; }
 
-    public void StartUDPServer(int port)
+    public Task StartServer(int port)
     {
-        udpServer = new UdpClient(port); // Initializes the UDP client to listen on the given port
-        remoteEndPoint = new IPEndPoint(IPAddress.Any, port); // Configures the endpoint to accept messages from any IP address on the given port.
-        Debug.Log("Server started. Waiting for messages...");
-        udpServer.BeginReceive(ReceiveData, null); // Asynchronous data reception begins
-        isServerRunning = true; // Sets the server running flag to true
+        udpServer = new UdpClient(port);
+        Debug.Log("[Server] Server started. Waiting for messages...");
+        isServerRunning = true;
+
+        _ = ReceiveLoop();
+        return Task.CompletedTask;
     }
 
-    private void ReceiveData(IAsyncResult result)
+    private async Task ReceiveLoop()
     {
-        byte[] receivedBytes = udpServer.EndReceive(result, ref remoteEndPoint); // Completes data reception and gets the received bytes.
-        string receivedMessage = System.Text.Encoding.UTF8.GetString(receivedBytes); // Converts received bytes to a string
-        Debug.Log("Received from client: " + receivedMessage);
-        udpServer.BeginReceive(ReceiveData, null); // Continues to receive data asynchronously
+        try
+        {
+            while (isServerRunning)
+            {
+                UdpReceiveResult result = await udpServer.ReceiveAsync();// Waits for incoming messages from the server asynchronously
+                string message = Encoding.UTF8.GetString(result.Buffer); // Converts the received bytes into a string message using UTF-8 encoding
+                
+                if (message == "CONNECT")
+                {
+                    Debug.Log("[Server] Client connected: " + result.RemoteEndPoint);
+                    remoteEndPoint = result.RemoteEndPoint;
+                    await SendMessageAsync("CONNECTED"); // Sends a welcome message back to the client to confirm the handshake
+                    OnConnected?.Invoke(); // Invokes the OnConnected event, notifying any subscribed listeners that a client has connected
+                    continue; // Skip the rest of the loop and wait for the next message
+                }
+
+                Debug.Log("[Server] Received: " + message);
+                OnMessageReceived?.Invoke(message);//Invokes the OnMessageReceived event, passing the received message to any subscribed listeners
+            }
+        }
+        finally
+        {
+            Disconnect();
+        }
     }
 
-    public void SendData(string message)
+    public async Task SendMessageAsync(string message)
     {
-        byte[] sendBytes = System.Text.Encoding.UTF8.GetBytes(message); // Converts the message to a byte array
-        udpServer.Send(sendBytes, sendBytes.Length, remoteEndPoint); // Sends bytes to the remote client using UDP
-        Debug.Log("Sent to client: " + message);
+        if (!isServerRunning) // Checks if there is an active connection to the server
+        {
+            Debug.Log("[Server] The server isn´t running");
+            return;
+        }
+
+        byte[] data = Encoding.UTF8.GetBytes(message);// Converts the message string into a byte array
+        await udpServer.SendAsync(data, data.Length, remoteEndPoint); // Sends the byte array to the server using UDP asynchronously
+
+        Debug.Log("[Server] Sent: " + message);
     }
 
-    
+
+    public void Disconnect()
+    {
+        if (!isServerRunning)
+        {
+            Debug.Log("[Server] The server is not running");
+            return;
+        }
+
+        isServerRunning = false;
+
+        udpServer?.Close();
+        udpServer?.Dispose();// Closes the UDP client and releases any resources associated with it
+        udpServer = null;
+
+        Debug.Log("[Server] Disconnected");
+        OnDisconnected?.Invoke();// Invokes the OnDisconnected event, notifying any subscribed listeners that the client has disconnected from the server
+
+    }
+
+    private async void OnDestroy()
+    {
+        Disconnect();
+        await Task.Delay(100); 
+    }
 }

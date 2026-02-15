@@ -1403,6 +1403,7 @@ MonoBehaviour:
   serverAddress: 127.0.0.1
   clientReference: {fileID: 1144782921}
   messageInput: {fileID: 1155689738}
+  message: {fileID: 0}
 --- !u!1 &1436465545
 GameObject:
   m_ObjectHideFlags: 0
