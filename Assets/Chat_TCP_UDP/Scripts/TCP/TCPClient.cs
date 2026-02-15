@@ -81,5 +81,11 @@ public class TCPClient : MonoBehaviour, IClient
         OnDisconnected?.Invoke(); // Invokes the OnDisconnected event, notifying any subscribed listeners that the client has disconnected from the server
         Debug.Log("[Client] Disconnected");
     }
+
+    private async void OnDestroy()
+    {
+        Disconnect();
+        await Task.Delay(100);
+    }
 }
 

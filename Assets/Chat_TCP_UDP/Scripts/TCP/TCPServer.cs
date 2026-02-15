@@ -85,5 +85,10 @@ public class TCPServer : MonoBehaviour, IServer
         OnDisconnected?.Invoke(); // Invokes the OnDisconnected event, notifying any subscribed listeners that the client has disconnected
     }
 
+    private async void OnDestroy()
+    {
+        Disconnect();
+        await Task.Delay(100);
+    }
 }
 
